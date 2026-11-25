@@ -13,6 +13,7 @@ internal sealed class MonitorForm : Form
     private readonly TextBox _summary;
     private readonly Button _refresh;
     private readonly ISystemMetricsProvider _metrics = new SystemMetricsProvider();
+    private SystemSnapshot? _lastSnapshot;
     private bool _refreshing;
     private bool _hotKeyRegistered;
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -33,7 +34,7 @@ internal sealed class MonitorForm : Form
         {
             Name = "summary",
             AccessibleName = "Resumen de recursos del sistema",
-            AccessibleDescription = "Resumen de utilización de CPU, memoria, almacenamiento y GPU",
+            AccessibleDescription = "Resumen de recursos. Pulsa Enter sobre un renglón de CPU, RAM o GPU, o haz clic en él, para consultar procesos relacionados.",
             Multiline = true,
             ReadOnly = true,
             WordWrap = false,
@@ -41,7 +42,24 @@ internal sealed class MonitorForm : Form
             Dock = DockStyle.Fill,
             TabIndex = 0,
             Font = SystemFonts.MessageBoxFont,
-            Text = "Monitor del sistema\r\n\r\nLos proveedores de métricas se incorporarán en la siguiente etapa."
+            Text = "Capturando métricas del sistema…"
+        };
+        _summary.MouseClick += async (_, e) =>
+        {
+            if (e.Button == MouseButtons.Left)
+                await OpenProcessDetailsAtAsync(_summary.GetCharIndexFromPosition(e.Location));
+        };
+        _summary.MouseMove += (_, e) =>
+        {
+            var line = GetLineAt(_summary.GetCharIndexFromPosition(e.Location));
+            _summary.Cursor = IsInteractiveLine(line) ? Cursors.Hand : Cursors.IBeam;
+        };
+        _summary.KeyDown += async (_, e) =>
+        {
+            if (e.KeyCode != Keys.Enter) return;
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            await OpenProcessDetailsAtAsync(_summary.SelectionStart);
         };
 
         _refresh = new Button { Text = "Actualizar", AccessibleName = "Actualizar métricas", AutoSize = true, TabIndex = 1 };
@@ -74,7 +92,11 @@ internal sealed class MonitorForm : Form
         try
         {
             var snapshot = await _metrics.CaptureAsync();
-            if (!IsDisposed) _summary.Text = SnapshotFormatter.Format(snapshot);
+            if (!IsDisposed)
+            {
+                _lastSnapshot = snapshot;
+                _summary.Text = SnapshotFormatter.Format(snapshot);
+            }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
@@ -86,6 +108,51 @@ internal sealed class MonitorForm : Form
             if (!IsDisposed) _refresh.Enabled = true;
         }
     }
+
+    private Task OpenProcessDetailsAtAsync(int characterIndex)
+    {
+        try
+        {
+            var line = GetLineAt(characterIndex);
+            if (line.StartsWith("Procesador:", StringComparison.Ordinal))
+            {
+                using var details = new ProcessDetailForm(ProcessResource.Cpu);
+                details.ShowDialog(this);
+            }
+            else if (line.StartsWith("Memoria RAM:", StringComparison.Ordinal))
+            {
+                using var details = new ProcessDetailForm(ProcessResource.Memory, systemMemory: _lastSnapshot?.Memory.Value);
+                details.ShowDialog(this);
+            }
+            else
+            {
+                var gpu = _lastSnapshot?.Gpus.FirstOrDefault(item => line.StartsWith($"GPU {item.Name}:", StringComparison.Ordinal));
+                if (gpu is null && !line.StartsWith("GPU:", StringComparison.Ordinal)) return Task.CompletedTask;
+                using var details = new ProcessDetailForm(ProcessResource.Gpu, gpu?.Luid, gpu?.Name);
+                details.ShowDialog(this);
+            }
+            FocusSummary();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            if (!IsDisposed) _summary.Text = $"No se pudo abrir la lista de procesos. {ex.Message}";
+        }
+        return Task.CompletedTask;
+    }
+
+    private string GetLineAt(int characterIndex)
+    {
+        if (_summary.Lines.Length == 0) return string.Empty;
+        var index = Math.Clamp(characterIndex, 0, Math.Max(0, _summary.TextLength));
+        var lineNumber = _summary.GetLineFromCharIndex(index);
+        return lineNumber >= 0 && lineNumber < _summary.Lines.Length ? _summary.Lines[lineNumber] : string.Empty;
+    }
+
+    private static bool IsInteractiveLine(string line) =>
+        line.StartsWith("Procesador:", StringComparison.Ordinal) ||
+        line.StartsWith("Memoria RAM:", StringComparison.Ordinal) ||
+        line.StartsWith("GPU ", StringComparison.Ordinal) ||
+        line.StartsWith("GPU:", StringComparison.Ordinal);
 
     public void FocusSummary()
     {

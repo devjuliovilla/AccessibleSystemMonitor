@@ -9,6 +9,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>ASM</AssemblyName>
     <RootNamespace>ASM</RootNamespace>
+    <Version>0.2.0</Version>
     <ApplicationIcon>..\..\assets\ASM.ico</ApplicationIcon>
     <UseAppHost>true</UseAppHost>
   </PropertyGroup>

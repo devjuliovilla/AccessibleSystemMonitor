@@ -19,8 +19,8 @@ public sealed class SystemMetricsProvider : ISystemMetricsProvider
         var memory = ReadMemory();
         var (disks, errors) = ReadDisks();
         var cpu = await cpuTask.ConfigureAwait(false);
-        var (gpus, gpuError) = await gpuTask.ConfigureAwait(false);
-        return new SystemSnapshot(DateTimeOffset.Now, cpu, memory, disks, errors, gpus, gpuError);
+        var gpuCapture = await gpuTask.ConfigureAwait(false);
+        return new SystemSnapshot(DateTimeOffset.Now, cpu, memory, disks, errors, gpuCapture.Adapters, gpuCapture.Error);
     }
 
     private static async Task<MetricValue<double>> ReadCpuAsync(CancellationToken token)

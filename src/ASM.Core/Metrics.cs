@@ -11,7 +11,19 @@ public sealed record GpuMetric(string Luid, string Name, double? UtilizationPerc
 public sealed record GpuEngineSample(string Luid, string Engine, double UtilizationPercent);
 public sealed record GpuMemorySample(string Luid, string MemoryType, ulong Bytes);
 public sealed record GpuAdapterInfo(string Luid, string Name, ulong? DedicatedCapacityBytes);
+public sealed record ProcessGpuEngineSample(int ProcessId, string Luid, string Engine, double UtilizationPercent);
+public sealed record ProcessGpuMemorySample(int ProcessId, string Luid, string MemoryType, ulong Bytes);
+public sealed record ProcessGpuMetric(int ProcessId, string Luid, string AdapterName, string? Engine, double? UtilizationPercent, ulong? DedicatedUsedBytes, ulong? SharedUsedBytes, string? Error = null);
+public sealed record ProcessMetric(int ProcessId, string Name, ulong? WorkingSetBytes, double? CpuPercent, IReadOnlyList<ProcessGpuMetric> Gpus, string? Error = null, long? StartTimeUtcTicks = null);
+public sealed record ProcessSnapshot(DateTimeOffset CapturedAt, IReadOnlyList<ProcessMetric> Processes, string? Error = null);
+public sealed record GpuCaptureResult(IReadOnlyList<GpuMetric> Adapters, IReadOnlyList<ProcessGpuMetric> Processes, string? Error);
 public sealed record SystemSnapshot(DateTimeOffset CapturedAt, MetricValue<double> CpuPercent, MetricValue<MemoryMetric> Memory, IReadOnlyList<DiskMetric> Disks, IReadOnlyList<string> DiskErrors, IReadOnlyList<GpuMetric> Gpus, string? GpuError = null);
+
+public static class ProcessIdentity
+{
+    public static bool Matches(long? expectedStartTimeUtcTicks, long actualStartTimeUtcTicks) =>
+        expectedStartTimeUtcTicks is > 0 && expectedStartTimeUtcTicks.Value == actualStartTimeUtcTicks;
+}
 
 public static class MetricMath
 {
@@ -36,6 +48,42 @@ public static class MetricMath
     }
 
     public static double UsedPercent(ulong total, ulong used) => total == 0 ? 0 : Math.Clamp((double)used * 100.0 / total, 0.0, 100.0);
+
+    public static double? ProcessCpuPercent(TimeSpan previous, TimeSpan current, TimeSpan elapsed, int processorCount)
+    {
+        if (processorCount <= 0 || elapsed <= TimeSpan.Zero || current < previous) return null;
+        var percentage = (current - previous).TotalSeconds / elapsed.TotalSeconds / processorCount * 100.0;
+        return double.IsFinite(percentage) ? Math.Clamp(percentage, 0, 100) : null;
+    }
+
+    public static IReadOnlyList<ProcessGpuMetric> AggregateProcessGpus(
+        IEnumerable<ProcessGpuEngineSample> engines,
+        IEnumerable<ProcessGpuMemorySample> memory,
+        IEnumerable<GpuAdapterInfo> adapters)
+    {
+        var adapterNames = adapters.ToDictionary(a => a.Luid, a => a.Name, StringComparer.OrdinalIgnoreCase);
+        var engineValues = engines.Where(e => e.ProcessId > 0 && double.IsFinite(e.UtilizationPercent))
+            .GroupBy(e => (e.ProcessId, e.Luid, e.Engine), ProcessGpuKeyComparer.Instance)
+            .Select(group => new ProcessGpuEngineSample(group.Key.ProcessId, group.Key.Luid, group.Key.Engine,
+                Math.Clamp(group.Sum(x => x.UtilizationPercent), 0, 100)))
+            .GroupBy(e => (e.ProcessId, e.Luid), ProcessGpuAdapterComparer.Instance)
+            .ToDictionary(group => group.Key, group => group.OrderByDescending(x => x.UtilizationPercent).First(), ProcessGpuAdapterComparer.Instance);
+        var memoryValues = memory.Where(m => m.ProcessId > 0)
+            .GroupBy(m => (m.ProcessId, m.Luid, m.MemoryType), ProcessGpuMemoryComparer.Instance)
+            .ToDictionary(group => group.Key, group => SumBytes(group.Select(x => x.Bytes)), ProcessGpuMemoryComparer.Instance);
+        var keys = engineValues.Keys.Concat(memoryValues.Keys.Select(k => (k.ProcessId, k.Luid))).Distinct(ProcessGpuAdapterComparer.Instance);
+
+        return keys.Select(key =>
+        {
+            engineValues.TryGetValue(key, out var engine);
+            memoryValues.TryGetValue((key.ProcessId, key.Luid, "Dedicated"), out var dedicated);
+            memoryValues.TryGetValue((key.ProcessId, key.Luid, "Shared"), out var shared);
+            adapterNames.TryGetValue(key.Luid, out var adapterName);
+            return new ProcessGpuMetric(key.ProcessId, key.Luid, adapterName ?? $"Adaptador {key.Luid}", engine?.Engine,
+                engine?.UtilizationPercent, dedicated, shared,
+                engine is null && dedicated is null && shared is null ? "Contadores por proceso no disponibles" : null);
+        }).OrderBy(x => x.ProcessId).ThenBy(x => x.AdapterName, StringComparer.CurrentCultureIgnoreCase).ToArray();
+    }
 
     public static IReadOnlyList<GpuMetric> AggregateGpus(IEnumerable<GpuAdapterInfo> adapters, IEnumerable<GpuEngineSample> engines, IEnumerable<GpuMemorySample> memory)
     {
@@ -80,6 +128,29 @@ public static class MetricMath
         public bool Equals((string Luid, string Engine) x, (string Luid, string Engine) y) =>
             StringComparer.OrdinalIgnoreCase.Equals(x.Luid, y.Luid) && StringComparer.OrdinalIgnoreCase.Equals(x.Engine, y.Engine);
         public int GetHashCode((string Luid, string Engine) obj) => HashCode.Combine(StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Luid), StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Engine));
+    }
+
+    private sealed class ProcessGpuKeyComparer : IEqualityComparer<(int ProcessId, string Luid, string Engine)>
+    {
+        public static readonly ProcessGpuKeyComparer Instance = new();
+        public bool Equals((int ProcessId, string Luid, string Engine) x, (int ProcessId, string Luid, string Engine) y) =>
+            x.ProcessId == y.ProcessId && StringComparer.OrdinalIgnoreCase.Equals(x.Luid, y.Luid) && StringComparer.OrdinalIgnoreCase.Equals(x.Engine, y.Engine);
+        public int GetHashCode((int ProcessId, string Luid, string Engine) obj) => HashCode.Combine(obj.ProcessId, StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Luid), StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Engine));
+    }
+
+    private sealed class ProcessGpuAdapterComparer : IEqualityComparer<(int ProcessId, string Luid)>
+    {
+        public static readonly ProcessGpuAdapterComparer Instance = new();
+        public bool Equals((int ProcessId, string Luid) x, (int ProcessId, string Luid) y) => x.ProcessId == y.ProcessId && StringComparer.OrdinalIgnoreCase.Equals(x.Luid, y.Luid);
+        public int GetHashCode((int ProcessId, string Luid) obj) => HashCode.Combine(obj.ProcessId, StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Luid));
+    }
+
+    private sealed class ProcessGpuMemoryComparer : IEqualityComparer<(int ProcessId, string Luid, string MemoryType)>
+    {
+        public static readonly ProcessGpuMemoryComparer Instance = new();
+        public bool Equals((int ProcessId, string Luid, string MemoryType) x, (int ProcessId, string Luid, string MemoryType) y) =>
+            x.ProcessId == y.ProcessId && StringComparer.OrdinalIgnoreCase.Equals(x.Luid, y.Luid) && StringComparer.OrdinalIgnoreCase.Equals(x.MemoryType, y.MemoryType);
+        public int GetHashCode((int ProcessId, string Luid, string MemoryType) obj) => HashCode.Combine(obj.ProcessId, StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Luid), StringComparer.OrdinalIgnoreCase.GetHashCode(obj.MemoryType));
     }
 }
 

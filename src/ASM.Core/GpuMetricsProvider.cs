@@ -12,13 +12,14 @@ public sealed class GpuMetricsProvider
     private const uint PdhLarge = 0x00000400;
     private const uint DxgiAdapterFlagSoftware = 2;
     private static readonly Regex LuidPattern = new(@"luid_(0x[0-9a-f]+)_(0x[0-9a-f]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ProcessIdPattern = new(@"(?:^|_)pid_(\d+)(?:_|$)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex EnginePattern = new(@"(phys_\d+_eng_\d+_engtype_[^\)]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    public async Task<(IReadOnlyList<GpuMetric> Gpus, string? Error)> CaptureAsync(CancellationToken cancellationToken = default)
+    public async Task<GpuCaptureResult> CaptureAsync(CancellationToken cancellationToken = default, bool includeProcessMetrics = false)
     {
         var adapters = EnumerateAdapters();
-        if (!OperatingSystem.IsWindows()) return ([], "Los contadores de GPU solo están disponibles en Windows.");
-        if (adapters.Count == 0) return ([], "No se encontraron adaptadores de GPU físicos mediante DXGI.");
+        if (!OperatingSystem.IsWindows()) return new([], [], "Los contadores de GPU solo están disponibles en Windows.");
+        if (adapters.Count == 0) return new([], [], "No se encontraron adaptadores de GPU físicos mediante DXGI.");
 
         try
         {
@@ -28,33 +29,49 @@ public sealed class GpuMetricsProvider
             var memoryCounters = new List<CounterEntry>();
             memoryCounters.AddRange(TryAddWildcardCounters(query.Handle, @"\GPU Adapter Memory(*)\Dedicated Usage", "Dedicated", errors));
             memoryCounters.AddRange(TryAddWildcardCounters(query.Handle, @"\GPU Adapter Memory(*)\Shared Usage", "Shared", errors));
+            if (includeProcessMetrics)
+            {
+                memoryCounters.AddRange(TryAddWildcardCounters(query.Handle, @"\GPU Process Memory(*)\Dedicated Usage", "ProcessDedicated", errors));
+                memoryCounters.AddRange(TryAddWildcardCounters(query.Handle, @"\GPU Process Memory(*)\Shared Usage", "ProcessShared", errors));
+            }
             if (engineCounters.Count == 0 && memoryCounters.Count == 0)
-                return (MetricMath.AggregateGpus(adapters, [], []), string.Join("; ", errors.DefaultIfEmpty("Windows no expone contadores GPU Engine/GPU Adapter Memory.")));
+                return new(MetricMath.AggregateGpus(adapters, [], []), [], string.Join("; ", errors.DefaultIfEmpty("Windows no expone contadores GPU Engine/GPU Adapter Memory.")));
 
             CheckPdh(PdhCollectQueryData(query.Handle));
             await Task.Delay(550, cancellationToken).ConfigureAwait(false);
             CheckPdh(PdhCollectQueryData(query.Handle));
 
             var engines = new List<GpuEngineSample>();
+            var processEngines = new List<ProcessGpuEngineSample>();
             foreach (var counter in engineCounters)
             {
                 if (!TryGetLuid(counter.Instance, out var luid)) continue;
                 var engine = EnginePattern.Match(counter.Instance);
                 if (!engine.Success || !TryGetFormattedValue(counter.Handle, PdhDouble, out var value) || !double.IsFinite(value)) continue;
-                engines.Add(new GpuEngineSample(luid, engine.Groups[1].Value, Math.Clamp(value, 0, 100)));
+                var utilization = Math.Clamp(value, 0, 100);
+                engines.Add(new GpuEngineSample(luid, engine.Groups[1].Value, utilization));
+                if (TryGetProcessId(counter.Instance, out var processId))
+                    processEngines.Add(new ProcessGpuEngineSample(processId, luid, engine.Groups[1].Value, utilization));
             }
 
             var memories = new List<GpuMemorySample>();
+            var processMemories = new List<ProcessGpuMemorySample>();
             foreach (var counter in memoryCounters)
             {
                 if (!TryGetLuid(counter.Instance, out var luid) || !TryGetFormattedValue(counter.Handle, PdhLarge, out var value) || value < 0) continue;
-                memories.Add(new GpuMemorySample(luid, counter.MemoryType!, (ulong)value));
+                var bytes = (ulong)value;
+                if (counter.MemoryType is "Dedicated" or "Shared")
+                    memories.Add(new GpuMemorySample(luid, counter.MemoryType, bytes));
+                else if (TryGetProcessId(counter.Instance, out var processId))
+                    processMemories.Add(new ProcessGpuMemorySample(processId, luid, counter.MemoryType == "ProcessDedicated" ? "Dedicated" : "Shared", bytes));
             }
-            return (MetricMath.AggregateGpus(adapters, engines, memories), errors.Count == 0 ? null : string.Join("; ", errors));
+            return new GpuCaptureResult(MetricMath.AggregateGpus(adapters, engines, memories),
+                includeProcessMetrics ? MetricMath.AggregateProcessGpus(processEngines, processMemories, adapters) : [],
+                errors.Count == 0 ? null : string.Join("; ", errors));
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or InvalidOperationException or ExternalException)
         {
-            return (MetricMath.AggregateGpus(adapters, [], []), $"Error al consultar contadores GPU: {ex.Message}");
+            return new GpuCaptureResult(MetricMath.AggregateGpus(adapters, [], []), [], $"Error al consultar contadores GPU: {ex.Message}");
         }
     }
 
@@ -169,6 +186,12 @@ public sealed class GpuMetricsProvider
         if (!match.Success) { luid = string.Empty; return false; }
         luid = NormalizeLuid(match.Groups[1].Value, match.Groups[2].Value);
         return true;
+    }
+
+    private static bool TryGetProcessId(string instance, out int processId)
+    {
+        var match = ProcessIdPattern.Match(instance);
+        return int.TryParse(match.Success ? match.Groups[1].Value : null, out processId) && processId > 0;
     }
 
     private static string NormalizeLuid(string high, string low) => $"{Convert.ToUInt32(high[2..], 16):X8}_{Convert.ToUInt32(low[2..], 16):X8}";

@@ -1,6 +1,6 @@
 # Reporte de implementación y validación
 
-Las etapas 1–3 y la publicación portable están completadas. Verificación: `dotnet test ASM.sln -c Release` aprobado (9/9), `dotnet build ASM.sln -c Release` aprobado (0 advertencias, 0 errores) y publicación `win-x64` self-contained de un solo archivo generada. La prueba manual de doble clic, validación con NVDA y comparación GPU siguen pendientes.
+La versión de trabajo 0.2.0 está implementada en `feature/process-usage`; no se ha publicado. Build y pruebas automatizadas aprobados: `dotnet build ASM.sln -c Release` (0 advertencias, 0 errores), `dotnet test ASM.sln -c Release` (13/13). Pruebas manuales con NVDA, menú contextual, UAC y validación de atribución VRAM en equipo híbrido siguen pendientes.
 
 ## Etapa 1 — estructura y ciclo de vida
 
@@ -45,6 +45,16 @@ Las etapas 1–3 y la publicación portable están completadas. Verificación: `
 
 ## Publicación portable
 
-- `tools/Publish-Portable.ps1` genera `artifacts/ASM-portable/ASM.exe` para Windows x64, autocontenido, de un solo archivo, sin trimming y con icono ASM incrustado.
+- `tools/Publish-Portable.ps1` genera `artifacts/ASM-portable-0.2.0-preview2/ASM.exe` para Windows x64, autocontenido, de un solo archivo, sin trimming y con icono ASM incrustado.
 - La salida fue generada y comprobada como un único archivo ejecutable en la carpeta portable. No se ha realizado todavía una prueba manual de apertura en el escritorio.
 - Al iniciar manualmente sin argumentos, abre la ventana. El argumento `--background` inicia oculto en la bandeja.
+
+## Versión 0.2.0 — procesos por recurso
+
+- **Interacción:** clic en un renglón o foco sobre CPU/RAM/GPU y Enter abre la tabla correspondiente. Escape cierra el diálogo y devuelve foco; F5 actualiza explícitamente.
+- **CPU:** `Process.TotalProcessorTime` entre muestras; porcentaje normalizado por número de procesadores lógicos y limitado a 100% de capacidad total.
+- **RAM:** muestra el total físico usado del sistema y `WorkingSet64` por proceso (residente; incluye páginas compartidas). Orden inicial por working set.
+- **GPU:** los contadores GPU Engine se vinculan por PID/LUID; agrega procesos del mismo motor y toma el motor más ocupado. Consulta adicional `GPU Process Memory` para memoria dedicada/compartida por PID si el sistema la proporciona. Vista filtrada por adaptador al activar una línea GPU.
+- **Límites:** procesos que terminan durante la captura o no son accesibles pueden faltar o tener celdas «No disponible». Memoria residente por proceso puede contar páginas compartidas y no sumará igual que RAM total. Los contadores VRAM por proceso dependen del driver/Windows; no se sustituyen por `QueryVideoMemoryInfo`, que refleja el proceso que consulta.
+- **Accesibilidad:** tabla WinForms nativa, encabezados accesibles, teclado, captura bajo demanda; debe probarse con NVDA real.
+- **Finalización:** botón y menú contextual actúan sobre la fila seleccionada; ASM intenta `CloseMainWindow`, solicita confirmación adicional antes de forzar, y usa un modo auxiliar del ejecutable con UAC solo si Windows deniega la operación. El modo elevado valida PID y hora de inicio, no carga la UI ni el mutex y solo termina el PID seleccionado, nunca el árbol de procesos. Pruebas manuales de permisos/procesos protegidos pendientes.

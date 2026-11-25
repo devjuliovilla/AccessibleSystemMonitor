@@ -16,6 +16,11 @@
 - Resumen de texto en español, fecha/hora de captura; botones Actualizar, Copiar y Cerrar. F5 actualiza. Ctrl+A/C funciona en resumen.
 - Capturar al abrir, mantener texto estable mientras se lee. Actualización manual por defecto; opción automática solo si no altera la lectura (si no puede garantizarse, posponerla). No muestrear continuamente cuando oculto.
 - Si una métrica falla, mostrar «No disponible» y conservar las demás. No bloquear UI durante muestreo.
+- Activar con clic o Enter los renglones de CPU, RAM y GPU para consultar procesos ordenados por consumo. La vista de procesos se recorre con teclado/NVDA, se cierra con Escape y permite actualizar con F5.
+- Por proceso: CPU normalizada al máximo de 100% de la capacidad total; RAM residente (working set); GPU por PID/adaptador/motor; memoria dedicada y compartida por proceso cuando PDH las exponga.
+- La tabla RAM ordena columnas como Proceso, RAM usada por proceso e ID del proceso (PID). CPU: Proceso, CPU total, PID. GPU: Proceso, Uso GPU, Memoria dedicada, Memoria compartida, PID, Adaptador y Motor más ocupado. No mostrar tabla por proceso de disco en esta versión.
+- Finalizar proceso desde botón o menú contextual de la fila, siempre con confirmación. Intentar cierre normal primero; si no responde, solicitar confirmación de terminación forzada. Solicitar UAC solo si Windows deniega la operación; ASM no se ejecuta elevado durante el uso normal. Validar identidad por PID y hora de inicio antes de terminar; no finalizar árbol de procesos.
+- No exigir que la suma por proceso coincida con la memoria global. Las páginas compartidas, caché, memoria de kernel, contadores no disponibles y procesos protegidos/inaccesibles pueden causar diferencias. No elevar privilegios.
 
 ## Fuera del MVP
-Historial, gráficas, alertas, temperaturas, procesos individuales, instalador, soporte remoto y control de hardware. Barras visuales opcionales después de validar el resumen accesible.
+Historial, gráficas, alertas, temperaturas, instalador, soporte remoto y control de hardware. Barras visuales opcionales después de validar el resumen accesible.

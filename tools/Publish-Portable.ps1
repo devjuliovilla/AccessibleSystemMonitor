@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$output = Join-Path $root 'artifacts\ASM-portable'
+$output = Join-Path $root 'artifacts\ASM-portable-0.2.0-preview2'
 Push-Location $root
 try {
     & dotnet publish '.\src\ASM\ASM.csproj' -c Release -r win-x64 --self-contained true `
@@ -11,4 +11,4 @@ try {
 }
 finally { Pop-Location }
 
-Write-Output "Portable listo en: $output\ASM.exe"
+Write-Output "Portable 0.2.0-preview2 listo en: $output\ASM.exe"

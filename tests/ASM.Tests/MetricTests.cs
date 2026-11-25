@@ -19,6 +19,24 @@ public sealed class MetricTests
     }
 
     [Fact]
+    public void ProcessCpuPercentNormalizesAcrossLogicalProcessorsAndClamps()
+    {
+        Assert.Equal(25, MetricMath.ProcessCpuPercent(TimeSpan.Zero, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), 4));
+        Assert.Equal(100, MetricMath.ProcessCpuPercent(TimeSpan.Zero, TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(1), 4));
+        Assert.Null(MetricMath.ProcessCpuPercent(TimeSpan.FromSeconds(1), TimeSpan.Zero, TimeSpan.FromSeconds(1), 4));
+        Assert.Null(MetricMath.ProcessCpuPercent(TimeSpan.Zero, TimeSpan.FromSeconds(1), TimeSpan.Zero, 4));
+    }
+
+    [Fact]
+    public void ProcessIdentityRejectsMissingOrRecycledPidStartTime()
+    {
+        Assert.True(ProcessIdentity.Matches(123456, 123456));
+        Assert.False(ProcessIdentity.Matches(123456, 123457));
+        Assert.False(ProcessIdentity.Matches(null, 123456));
+        Assert.False(ProcessIdentity.Matches(0, 0));
+    }
+
+    [Fact]
     public void MemoryUsesPhysicalTotalMinusAvailable()
     {
         var value = MetricMath.CreateMemory(1000, 250);
@@ -77,6 +95,32 @@ public sealed class MetricTests
     }
 
     [Fact]
+    public void ProcessGpuAggregationGroupsByPidAndAdapterWithoutSummingDifferentEngines()
+    {
+        var engines = new[]
+        {
+            new ProcessGpuEngineSample(12, "A", "3D", 30),
+            new ProcessGpuEngineSample(12, "A", "3D", 20),
+            new ProcessGpuEngineSample(12, "A", "Copy", 45),
+            new ProcessGpuEngineSample(13, "B", "3D", 80)
+        };
+        var memory = new[]
+        {
+            new ProcessGpuMemorySample(12, "A", "Dedicated", 100),
+            new ProcessGpuMemorySample(12, "A", "Shared", 200)
+        };
+        var adapters = new[] { new GpuAdapterInfo("A", "GPU A", 1000), new GpuAdapterInfo("B", "GPU B", 2000) };
+        var result = MetricMath.AggregateProcessGpus(engines, memory, adapters);
+        Assert.Equal(2, result.Count);
+        var first = Assert.Single(result, x => x.ProcessId == 12);
+        Assert.Equal(50, first.UtilizationPercent);
+        Assert.Equal("3D", first.Engine);
+        Assert.Equal((ulong)100, first.DedicatedUsedBytes);
+        Assert.Equal((ulong)200, first.SharedUsedBytes);
+        Assert.Equal("GPU B", Assert.Single(result, x => x.ProcessId == 13).AdapterName);
+    }
+
+    [Fact]
     public async Task WindowsProviderReturnsSnapshotAndRepresentsUnavailableMetrics()
     {
         var snapshot = await new SystemMetricsProvider().CaptureAsync();
@@ -86,5 +130,15 @@ public sealed class MetricTests
         Assert.All(snapshot.Disks, disk => Assert.InRange(disk.UsedPercent, 0, 100));
         Assert.True(snapshot.Gpus.Count > 0 || snapshot.GpuError is not null);
         Assert.All(snapshot.Gpus, gpu => Assert.True(gpu.UtilizationPercent.HasValue || gpu.DedicatedUsedBytes.HasValue || gpu.SharedUsedBytes.HasValue || gpu.Error is not null));
+    }
+
+    [Fact]
+    public async Task ProcessProviderIncludesCurrentProcessAndItsIdentity()
+    {
+        var snapshot = await new ProcessMetricsProvider().CaptureAsync();
+        var current = Assert.Single(snapshot.Processes, process => process.ProcessId == Environment.ProcessId);
+        Assert.False(string.IsNullOrWhiteSpace(current.Name));
+        Assert.True(current.WorkingSetBytes is > 0);
+        Assert.True(current.StartTimeUtcTicks is > 0);
     }
 }

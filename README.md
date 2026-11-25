@@ -5,7 +5,7 @@ Aplicación nativa de Windows para consultar CPU, RAM, almacenamiento y GPU medi
 Consultar CPU, RAM, almacenamiento y GPU rápidamente mediante teclado, NVDA o mouse. Aplicación local residente en la bandeja del sistema, con ventana pequeña sobre la barra de tareas.
 
 ## Estado
-Implementadas las etapas 1 a 3: ventana accesible base, bandeja, atajo global Ctrl+Alt+M, instancia única y métricas de CPU, RAM, volúmenes fijos y GPU. Al abrir `ASM.exe` manualmente, la ventana aparece; con `--background` inicia oculta para ejecución automática. La GPU requiere validación manual en equipos híbridos.
+Versión de trabajo 0.2.0: incluye resumen de CPU/RAM/discos/GPU y tablas de procesos al activar las líneas de CPU, RAM o GPU con clic o Enter. Las tablas permiten finalizar el proceso seleccionado mediante botón o menú contextual, con confirmación; UAC solo se solicita si Windows deniega el acceso. Al abrir `ASM.exe` manualmente, la ventana aparece; con `--background` inicia oculta. La atribución VRAM por proceso y la validación manual con NVDA/equipo híbrido siguen pendientes.
 
 ## Compilar
 Requisitos: Windows 11 x64 y SDK .NET 10.
@@ -20,7 +20,7 @@ La aplicación se inicia con el resumen visible al hacer doble clic. Usa `--back
 
 ## Publicación portable
 
-Ejecuta `tools\Publish-Portable.ps1`. Genera un único `ASM.exe` autocontenido para Windows 11 x64 en `artifacts\ASM-portable\`; no requiere instalar .NET. Copia ese ejecutable a la computadora de destino y haz doble clic.
+Ejecuta `tools\Publish-Portable.ps1`. Genera un único `ASM.exe` autocontenido para Windows 11 x64 en `artifacts\ASM-portable-0.2.0-preview2\`; no requiere instalar .NET. Copia ese ejecutable a la computadora de destino y haz doble clic.
 
 El icono de la aplicación se guarda en `assets\ASM.ico`; se puede regenerar con `tools\Generate-Icon.ps1`.
 

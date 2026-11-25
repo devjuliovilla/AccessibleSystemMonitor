@@ -7,6 +7,12 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (ProcessTerminationService.IsElevatedHelper(args))
+        {
+            Environment.ExitCode = ProcessTerminationService.RunElevatedHelper(args);
+            return;
+        }
+
         ApplicationConfiguration.Initialize();
         using var mutex = new Mutex(true, $"Local\\ASM-{Environment.UserName}", out bool createdNew);
         if (!createdNew)
